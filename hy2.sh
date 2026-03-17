@@ -50,22 +50,31 @@ apply_iptables() {
     netfilter-persistent save >/dev/null 2>&1 || iptables-save > /etc/iptables/rules.v4
 }
 
-# 增加新规则
+# 增加新规则 (已修改为单行快捷输入)
 add_rule() {
-    echo -n "请输入端口段开始值 (如 50000): "
-    read RANGE_START
-    echo -n "请输入端口段结束值 (如 53000): "
-    read RANGE_END
-    echo -n "请输入 HY2 实际监听端口 (如 36951): "
-    read HY2_PORT
+    echo -n "请输入规则 (格式: 起始端口-结束端口-目标端口，例如 36921-37921-36920): "
+    read INPUT_STR
 
-    if [ -n "$RANGE_START" ] && [ -n "$RANGE_END" ] && [ -n "$HY2_PORT" ]; then
+    # 检查是否为空输入
+    if [ -z "$INPUT_STR" ]; then
+        echo "❌ 输入为空，已放弃添加。"
+        return
+    fi
+
+    # 使用 "-" 作为分隔符，提取出三个端口号
+    RANGE_START=$(echo "$INPUT_STR" | awk -F'-' '{print $1}')
+    RANGE_END=$(echo "$INPUT_STR" | awk -F'-' '{print $2}')
+    HY2_PORT=$(echo "$INPUT_STR" | awk -F'-' '{print $3}')
+
+    # 严格校验：确保提取出来的三个值都是纯数字，防止输入错误导致系统报错
+    if [[ "$RANGE_START" =~ ^[0-9]+$ ]] && [[ "$RANGE_END" =~ ^[0-9]+$ ]] && [[ "$HY2_PORT" =~ ^[0-9]+$ ]]; then
+        # 写入文件时仍然用空格隔开，以兼容我们读取规则的逻辑
         echo "$RANGE_START $RANGE_END $HY2_PORT" >> "$RULES_FILE"
         echo "正在应用新规则..."
         apply_iptables
         echo "✔ 新增规则配置完成！"
     else
-        echo "❌ 输入有空值，已放弃添加。"
+        echo "❌ 输入格式错误！请确保格式为【端口-端口-端口】且只包含数字和减号。"
     fi
 }
 
@@ -123,7 +132,7 @@ install_dependencies() {
 menu() {
     echo "============ HY2 端口跳跃 NAT 管理 ============"
     echo "1) 安装依赖 (首次使用需运行)"
-    echo "2) 增加一条端口转发规则 (可无限叠加)"
+    echo "2) 增加一条端口转发规则 (格式: A-B-C)"
     echo "3) 查看当前所有规则 (真实系统状态)"
     echo "4) 删除单条规则 (按行号)"
     echo "5) 清空所有规则"
