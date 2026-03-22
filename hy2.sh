@@ -16,28 +16,29 @@ RULES_FILE="/etc/hy2_nat_rules.txt"
 touch "$RULES_FILE"
 
 # ================= 基础函数 =================
-# 打印带颜色的信息前缀
 info() { echo -e "${CYAN}[信息]${NC} $1"; }
 success() { echo -e "${GREEN}[成功]${NC} $1"; }
 error() { echo -e "${RED}[错误]${NC} $1"; }
-warn() { echo -e "${YELLOW}[警告]${NC} $1"; }
 
-# 自动检测并保存网卡 (支持 IPv4 和 IPv6)
+# 自动检测并保存网卡 (支持 IPv4 和 IPv6，并兼容旧版修复)
 detect_interface() {
-    if [ -f "$IFACE_FILE" ]; then
-        source "$IFACE_FILE"
-    else
+    # 尝试读取已有配置
+    [ -f "$IFACE_FILE" ] && source "$IFACE_FILE"
+    
+    # 校验是否成功读取到了双栈网卡配置 (防止旧版本残留)
+    if [ -z "$IFACE4" ] || [ -z "$IFACE6" ]; then
         info "正在自动检测系统网络接口..."
+        
         # 分别获取 IPv4 和 IPv6 的默认出网网卡
         IFACE4=$(ip -o -4 route show to default | awk '{print $5}' | head -n 1)
         IFACE6=$(ip -o -6 route show to default | awk '{print $5}' | head -n 1)
         
-        # 容错处理：如果没获取到，取第一个非 lo 的网卡
+        # 容错处理：如果系统没默认路由，取第一个非回环的网卡
         [ -z "$IFACE4" ] && IFACE4=$(ip link | grep -v 'lo' | awk -F: '/^[0-9]+:/{print $2}' | tr -d ' ' | head -n 1)
+        # 如果获取不到 IPv6 路由，默认绑定到跟 IPv4 相同的物理网卡上
         [ -z "$IFACE6" ] && IFACE6=$IFACE4
 
-        info "检测到 IPv4 接口为: ${YELLOW}$IFACE4${NC}"
-        info "检测到 IPv6 接口为: ${YELLOW}$IFACE6${NC}"
+        # 覆写保存，清除旧版遗留的单栈变量
         echo "IFACE4=$IFACE4" > "$IFACE_FILE"
         echo "IFACE6=$IFACE6" >> "$IFACE_FILE"
     fi
@@ -47,7 +48,7 @@ detect_interface() {
 apply_iptables() {
     detect_interface
 
-    # 清理规则文件中的空行，保证行号与输出一致
+    # 清理规则文件中的空行
     sed -i '/^$/d' "$RULES_FILE"
 
     # ================= IPv4 配置 =================
@@ -113,15 +114,19 @@ add_rule() {
 # 查看当前系统生效的规则
 view_rules() {
     echo -e "\n${BLUE}================ 当前生效的 IPv4 转发规则 ================${NC}"
-    iptables -t nat -L HY2_PREROUTING -n -v --line-numbers 2>/dev/null
-    if [ $? -ne 0 ] || [ $(iptables -t nat -L HY2_PREROUTING -n 2>/dev/null | wc -l) -le 2 ]; then
+    V4_RULES=$(iptables -t nat -L HY2_PREROUTING -n -v --line-numbers 2>/dev/null)
+    if [ $? -ne 0 ] || [ $(echo "$V4_RULES" | wc -l) -le 2 ]; then
         echo -e "  ${YELLOW}暂无任何生效的 IPv4 转发规则。${NC}"
+    else
+        echo "$V4_RULES"
     fi
     
     echo -e "\n${BLUE}================ 当前生效的 IPv6 转发规则 ================${NC}"
-    ip6tables -t nat -L HY2_PREROUTING -n -v --line-numbers 2>/dev/null
-    if [ $? -ne 0 ] || [ $(ip6tables -t nat -L HY2_PREROUTING -n 2>/dev/null | wc -l) -le 2 ]; then
+    V6_RULES=$(ip6tables -t nat -L HY2_PREROUTING -n -v --line-numbers 2>/dev/null)
+    if [ $? -ne 0 ] || [ $(echo "$V6_RULES" | wc -l) -le 2 ]; then
         echo -e "  ${YELLOW}暂无任何生效的 IPv6 转发规则。${NC}"
+    else
+        echo "$V6_RULES"
     fi
     echo -e "${BLUE}==========================================================${NC}\n"
 }
@@ -162,11 +167,9 @@ install_dependencies() {
     info "开始更新软件源并安装依赖..."
     apt update -y > /dev/null 2>&1
     
-    # 预先设定 iptables-persistent 的安装选项为 true，跳过确认弹窗
     echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
     echo iptables-persistent iptables-persistent/autosave_v6 boolean true | debconf-set-selections
     
-    # 使用非交互模式静默安装
     DEBIAN_FRONTEND=noninteractive apt install -y iptables iptables-persistent netfilter-persistent > /dev/null 2>&1
     
     info "配置系统内核，开启 IPv4 和 IPv6 转发..."
@@ -205,7 +208,7 @@ menu() {
     esac
 }
 
-# 确保每次回到菜单前都有网卡信息，但不输出多余提示
+# 后台静默预加载网卡信息
 detect_interface >/dev/null 2>&1
 
 # 循环主程序
