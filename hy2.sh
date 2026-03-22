@@ -27,7 +27,7 @@ detect_interface() {
     
     # 校验是否成功读取到了双栈网卡配置 (防止旧版本残留)
     if [ -z "$IFACE4" ] || [ -z "$IFACE6" ]; then
-        info "正在自动检测系统网络接口..."
+        info "未检测到双栈网卡配置，正在自动获取并修复..."
         
         # 分别获取 IPv4 和 IPv6 的默认出网网卡
         IFACE4=$(ip -o -4 route show to default | awk '{print $5}' | head -n 1)
@@ -37,6 +37,9 @@ detect_interface() {
         [ -z "$IFACE4" ] && IFACE4=$(ip link | grep -v 'lo' | awk -F: '/^[0-9]+:/{print $2}' | tr -d ' ' | head -n 1)
         # 如果获取不到 IPv6 路由，默认绑定到跟 IPv4 相同的物理网卡上
         [ -z "$IFACE6" ] && IFACE6=$IFACE4
+
+        info "检测到 IPv4 接口为: ${YELLOW}$IFACE4${NC}"
+        info "检测到 IPv6 接口为: ${YELLOW}$IFACE6${NC}"
 
         # 覆写保存，清除旧版遗留的单栈变量
         echo "IFACE4=$IFACE4" > "$IFACE_FILE"
@@ -115,7 +118,8 @@ add_rule() {
 view_rules() {
     echo -e "\n${BLUE}================ 当前生效的 IPv4 转发规则 ================${NC}"
     V4_RULES=$(iptables -t nat -L HY2_PREROUTING -n -v --line-numbers 2>/dev/null)
-    if [ $? -ne 0 ] || [ $(echo "$V4_RULES" | wc -l) -le 2 ]; then
+    # 过滤判断是否真的存在 REDIRECT 规则
+    if [ -z "$V4_RULES" ] || ! echo "$V4_RULES" | grep -q "REDIRECT"; then
         echo -e "  ${YELLOW}暂无任何生效的 IPv4 转发规则。${NC}"
     else
         echo "$V4_RULES"
@@ -123,7 +127,8 @@ view_rules() {
     
     echo -e "\n${BLUE}================ 当前生效的 IPv6 转发规则 ================${NC}"
     V6_RULES=$(ip6tables -t nat -L HY2_PREROUTING -n -v --line-numbers 2>/dev/null)
-    if [ $? -ne 0 ] || [ $(echo "$V6_RULES" | wc -l) -le 2 ]; then
+    # 过滤判断是否真的存在 REDIRECT 规则
+    if [ -z "$V6_RULES" ] || ! echo "$V6_RULES" | grep -q "REDIRECT"; then
         echo -e "  ${YELLOW}暂无任何生效的 IPv6 转发规则。${NC}"
     else
         echo "$V6_RULES"
